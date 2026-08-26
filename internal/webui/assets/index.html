@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Vacuum</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>&#129529;</text></svg>">
+</head>
+<body>
+<header>
+  <h1>Web Vacuum</h1>
+  <div id="phase" class="phase">connecting…</div>
+  <div class="grow"></div>
+  <div id="controls" class="controls hidden">
+    <div class="stepper" title="Connections used at once">
+      <button id="conn-down" type="button">&minus;</button>
+      <b id="conn-count">–</b>
+      <button id="conn-up" type="button">+</button>
+    </div>
+    <button id="btn-pause" type="button">Pause</button>
+    <button id="btn-localize" type="button" title="Rewrite links in everything downloaded so far, without waiting for the download to finish">Rewrite links</button>
+    <button id="btn-slower" type="button" title="Reduce the download speed">Slower</button>
+    <button id="btn-faster" type="button" title="Increase the download speed">Faster</button>
+    <button id="btn-stop" type="button" class="danger">Stop</button>
+  </div>
+  <button id="btn-theme" class="icon" type="button" title="Switch between dark and light">◐</button>
+</header>
+
+<main>
+  <!-- Setup form, shown when nothing is running yet. -->
+  <section id="setup" class="card hidden">
+    <h2>Start a download</h2>
+    <p class="hint">Everything here has a sensible default. The only thing you must fill in is the address.</p>
+
+    <label>Website address
+      <input id="f-url" type="text" placeholder="example.com" autocomplete="off" spellcheck="false">
+    </label>
+
+    <label>Save into
+      <input id="f-dest" type="text" placeholder="leave empty to use a folder named after the site" autocomplete="off" spellcheck="false">
+    </label>
+
+    <div class="row">
+      <label>How far to roam
+        <select id="f-scope"></select>
+      </label>
+      <label>Link depth
+        <input id="f-levels" type="number" min="0" placeholder="0 = no limit">
+      </label>
+      <label>Connections
+        <input id="f-conns" type="number" min="1" max="256" value="8">
+      </label>
+    </div>
+
+    <label>Also download from these domains
+      <input id="f-domains" type="text" placeholder="images.example-cdn.com, .static.example.com" autocomplete="off" spellcheck="false">
+      <span class="hint">Comma separated. Use this when a forum keeps its pictures on another domain. A leading dot also matches subdomains.</span>
+    </label>
+
+    <label>Never download URLs matching
+      <input id="f-exclude" type="text" placeholder="/(login|logout|newreply)" autocomplete="off" spellcheck="false">
+      <span class="hint">Regular expressions, comma separated. These win over everything else.</span>
+    </label>
+
+    <label>Strip these query parameters
+      <input id="f-dropparams" type="text" placeholder="s, sid, PHPSESSID" autocomplete="off" spellcheck="false">
+      <span class="hint">Old forums put a session id in every link, which makes one page look like thousands. Stripping them keeps the crawl finite.</span>
+    </label>
+
+    <details>
+      <summary>More options</summary>
+      <div class="row">
+        <label>Stop after this many files
+          <input id="f-maxfiles" type="number" min="0" placeholder="0 = no limit">
+        </label>
+        <label>Stop after this much data
+          <input id="f-maxsize" type="text" placeholder="e.g. 5GB">
+        </label>
+        <label>Skip files bigger than
+          <input id="f-maxfilesize" type="text" placeholder="e.g. 100MB">
+        </label>
+      </div>
+      <div class="row">
+        <label>Speed limit
+          <input id="f-rate" type="text" placeholder="e.g. 2MB (per second)">
+        </label>
+        <label>Wait between requests
+          <input id="f-delay" type="text" placeholder="e.g. 500ms">
+        </label>
+        <label>Identify as
+          <select id="f-ua"></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Supporting files from
+          <select id="f-supporting"></select>
+          <span class="hint">Which hosts may serve images, styles and scripts.</span>
+        </label>
+        <label>Run JavaScript
+          <select id="f-render"></select>
+          <span class="hint">Needed only for sites that build their pages in the browser.</span>
+        </label>
+      </div>
+      <label class="check"><input id="f-robots" type="checkbox"> Ignore robots.txt</label>
+      <label class="check"><input id="f-sitemap" type="checkbox"> Also read sitemap.xml to find unlinked pages</label>
+      <label class="check"><input id="f-localize" type="checkbox" checked> Rewrite links so the copy works offline</label>
+      <label class="check"><input id="f-scroll" type="checkbox"> Scroll rendered pages to load lazy images</label>
+    </details>
+
+    <div class="actions">
+      <button id="btn-start" type="button" class="primary">Start downloading</button>
+      <span id="setup-error" class="error"></span>
+    </div>
+  </section>
+
+  <!-- Live dashboard, shown once a job exists. -->
+  <section id="dash" class="hidden">
+    <div class="cards">
+      <div class="card stat"><span class="label">Saved</span><b id="s-done">0</b><span id="s-bytes" class="sub"></span></div>
+      <div class="card stat"><span class="label">Queued</span><b id="s-queued">0</b><span id="s-eta" class="sub"></span></div>
+      <div class="card stat"><span class="label">Failed</span><b id="s-failed">0</b><span id="s-skipped" class="sub"></span></div>
+      <div class="card stat"><span class="label">Speed</span><b id="s-speed">0</b><span id="s-elapsed" class="sub"></span></div>
+      <div class="card stat"><span class="label">Network</span><b id="s-net">online</b><span id="s-outage" class="sub"></span></div>
+    </div>
+
+    <div id="offline-banner" class="banner hidden"></div>
+
+    <div class="card">
+      <div class="progress"><div id="bar" class="bar"></div></div>
+      <div id="dest" class="mono sub" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Connections</h2>
+      <table class="slots">
+        <thead><tr>
+          <th style="width:26px">#</th>
+          <th style="width:96px">Progress</th>
+          <th style="width:110px">Phase</th>
+          <th style="width:46px">Code</th>
+          <th style="width:120px" class="num">Size</th>
+          <th style="width:88px" class="num">Speed</th>
+          <th style="width:60px" class="num">Time</th>
+          <th>URL</th>
+        </tr></thead>
+        <tbody id="slots"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <nav class="tabs">
+        <button class="tab active" data-tab="log" type="button">Log</button>
+        <button class="tab" data-tab="failed" type="button">Failures</button>
+        <button class="tab" data-tab="queued" type="button">Queue</button>
+        <button class="tab" data-tab="done" type="button">Files</button>
+        <button class="tab" data-tab="settings" type="button">Settings</button>
+        <input id="filter" type="search" placeholder="filter…" autocomplete="off">
+      </nav>
+      <div id="pane-log" class="pane mono"></div>
+      <div id="pane-list" class="pane hidden"><table><tbody id="list"></tbody></table></div>
+      <div id="pane-settings" class="pane hidden">
+        <div id="settings" class="settings"></div>
+        <p id="settings-status" class="sub" style="margin-top:12px"></p>
+      </div>
+    </div>
+
+    <div id="finished" class="card hidden">
+      <h2>Finished</h2>
+      <p id="finished-text"></p>
+      <a id="open-link" class="button" target="_blank" rel="noopener">Browse the downloaded copy</a>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
