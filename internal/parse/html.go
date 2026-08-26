@@ -311,7 +311,8 @@ func (doc *Document) collectMeta(byName map[string]rawAttr, opt Options) {
 	content, hasContent := byName["content"]
 
 	if equiv == "content-type" && hasContent && doc.Charset == "" {
-		if i := strings.Index(strings.ToLower(content.value), "charset="); i >= 0 {
+		// The same care as elsewhere: the offset is applied to the original.
+		if i := strings.Index(AsciiLowerString(content.value), "charset="); i >= 0 {
 			doc.Charset = strings.TrimSpace(content.value[i+len("charset="):])
 		}
 	}
@@ -342,12 +343,17 @@ func (doc *Document) collectMeta(byName map[string]rawAttr, opt Options) {
 // metaRefreshURL locates the URL inside a refresh directive and returns its
 // offsets within the attribute value.
 func metaRefreshURL(content string) (int, int, string) {
-	lower := strings.ToLower(content)
+	// Length-preserving: the index found here is used to slice content itself,
+	// and an attribute value in a legacy encoding would otherwise shift it.
+	lower := AsciiLowerString(content)
 	i := strings.Index(lower, "url=")
 	if i < 0 {
 		return 0, 0, ""
 	}
 	start := i + 4
+	if start > len(content) {
+		return 0, 0, ""
+	}
 	for start < len(content) && (content[start] == ' ' || content[start] == '\t') {
 		start++
 	}
@@ -492,13 +498,52 @@ func isSpaceByte(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f'
 }
 
+// AsciiLower returns a lowercased copy that is byte-for-byte the same length as
+// the input.
+//
+// bytes.ToLower must not be used where the result's offsets are applied back to
+// the original: it decodes UTF-8, and every byte that is not valid UTF-8 comes
+// back as a three-byte replacement character. A page in windows-1251 — which is
+// most of the old web, and nearly all old forums — grows by several bytes per
+// Cyrillic character, so an index taken from the lowercased copy lands past the
+// end of the original and the slice panics.
+//
+// Tag and attribute names are ASCII, so folding only ASCII is all that case
+// insensitivity requires here.
+// AsciiLowerString is the string form, with the same guarantee and for the same
+// reason: strings.ToLower re-encodes, so an index taken from its result cannot
+// be applied to the original.
+func AsciiLowerString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func AsciiLower(src []byte) []byte {
+	out := make([]byte, len(src))
+	for i, b := range src {
+		if b >= 'A' && b <= 'Z' {
+			b += 'a' - 'A'
+		}
+		out[i] = b
+	}
+	return out
+}
+
 // scanElementBodies finds the text content of every <tag>...</tag> pair and
 // hands it to fn with its absolute offset.
 func scanElementBodies(src []byte, tag string, fn func([]byte, int) []Link) []Link {
 	var out []Link
 	open := []byte("<" + tag)
 	closeTag := []byte("</" + tag)
-	lower := bytes.ToLower(src)
+	lower := AsciiLower(src)
 	pos := 0
 	for {
 		i := bytes.Index(lower[pos:], open)
@@ -653,7 +698,7 @@ func ElementRanges(src []byte, tag string) []Range {
 	var out []Range
 	open := []byte("<" + tag)
 	closeTag := []byte("</" + tag)
-	lower := bytes.ToLower(src)
+	lower := AsciiLower(src)
 	pos := 0
 	for {
 		i := bytes.Index(lower[pos:], open)

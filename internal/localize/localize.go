@@ -298,7 +298,9 @@ func injectBanner(src []byte, text string, docURL *url.URL) []byte {
 			`<a href="%s" style="color:#64d2ff">%s</a></div>`,
 		htmlEscape(text), htmlEscape(docURL.String()), htmlEscape(docURL.String()))
 
-	lower := bytes.ToLower(src)
+	// Length-preserving, because the index is applied back to src: see
+	// parse.AsciiLower for why bytes.ToLower cannot be used here.
+	lower := parse.AsciiLower(src)
 	if i := bytes.Index(lower, []byte("<body")); i >= 0 {
 		if gt := bytes.IndexByte(src[i:], '>'); gt >= 0 {
 			at := i + gt + 1

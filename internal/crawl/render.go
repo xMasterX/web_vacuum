@@ -178,7 +178,9 @@ func LooksJSDriven(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
-	lower := bytes.ToLower(body)
+	// Only used for a containment check, but folding ASCII avoids re-encoding a
+	// whole page that is not UTF-8 just to look for one tag.
+	lower := parse.AsciiLower(body)
 	if !bytes.Contains(lower, []byte("<script")) {
 		// Without script there is nothing for a browser to run that a parser
 		// would miss.

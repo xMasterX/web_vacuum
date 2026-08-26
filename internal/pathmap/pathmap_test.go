@@ -150,3 +150,31 @@ func TestLocalRefusesEscape(t *testing.T) {
 		t.Fatalf("Local = %q, %v", got, err)
 	}
 }
+
+// TestMapHandlesLegacyEncodedURLs covers filenames derived from URLs whose
+// percent-encoded bytes are not UTF-8, which is normal on an old site.
+func TestMapHandlesLegacyEncodedURLs(t *testing.T) {
+	m := newMapper(t, nil)
+	for _, raw := range []string{
+		"https://forum.example/%d0%f3%f1%f1%ea%e8%e9.html",
+		"https://forum.example/showthread.php?t=1&title=%f2%e5%ea%f1%f2",
+		"https://forum.example/" + strings.Repeat("%f0", 300) + ".html",
+	} {
+		u, err := urlx.Parse(raw)
+		if err != nil {
+			continue
+		}
+		rel := m.Map(u, Hint{MediaType: "text/html", IsHTML: true})
+		if rel == "" {
+			t.Errorf("Map(%s) produced an empty path", raw)
+		}
+		if _, err := Local("/tmp/dest", rel); err != nil {
+			t.Errorf("Map(%s) -> %q escaped the destination: %v", raw, rel, err)
+		}
+		for _, seg := range strings.Split(rel, "/") {
+			if seg == "" || seg == "." || seg == ".." {
+				t.Errorf("Map(%s) -> %q has an unsafe segment", raw, rel)
+			}
+		}
+	}
+}
