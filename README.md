@@ -208,6 +208,19 @@ of reverting to the defaults. Flags given on the new run still win over the
 saved values, and `--fresh-settings` ignores the file and starts from the
 defaults.
 
+A repeatable option — `--exclude`, `--drop-param`, `-d` and the rest —
+**replaces** the saved list rather than adding to it. Repeating it inside a
+single run still builds the whole list, so `--exclude a --exclude b` means
+exactly those two and nothing else. Giving it an empty value clears the list:
+
+```sh
+webvacuum forum.example.com --exclude ''
+```
+
+Without that rule, passing the same `--exclude` on each of five runs would leave
+five copies of it, and there would be no way to take a pattern back once it had
+been saved.
+
 A few settings cannot change on a job already underway — the destination, the
 start URLs, the path layout — because they decide where files land, and moving
 that target mid-run would leave half a mirror in one shape and half in another.

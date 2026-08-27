@@ -27,7 +27,7 @@ var groups = []struct {
 	title string
 	names []string
 }{
-	{"Where it goes", []string{"o", "out", "output", "name", "config", "save-config"}},
+	{"Where it goes", []string{"o", "out", "output", "name", "config", "save-config", "fresh-settings"}},
 	{"What to download", []string{
 		"scope", "d", "domain", "domains", "asset-domain", "block-domain",
 		"include", "exclude", "include-glob", "exclude-glob",
@@ -97,7 +97,16 @@ func (f *flagSet) printUsage() {
 		for _, l := range rest {
 			fmt.Fprintln(w, l)
 		}
+		fmt.Fprintln(w)
 	}
+
+	fmt.Fprint(w, `Running the same command again resumes, and picks up the settings the
+last run was left with, including anything changed from the Setup pane.
+Options given now win over those. A repeatable option such as --exclude
+or --drop-param replaces the saved list rather than adding to it, so the
+list is always what the last command line said; give it an empty value to
+clear it, or --fresh-settings to start from the defaults.
+`)
 }
 
 func formatFlag(fl *flag.Flag) string {

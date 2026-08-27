@@ -512,7 +512,57 @@ func Default() *Config {
 
 // Normalize fills in derived defaults and returns an error for anything that
 // cannot produce a working crawl.
+// dedupeOnce removes repeated entries from a list of rules, keeping the first
+// of each and the order they were written in.
+func dedupeOnce(in []string) []string {
+	if len(in) < 2 {
+		return in
+	}
+	seen := make(map[string]bool, len(in))
+	out := in[:0:0]
+	for _, v := range in {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
+}
+
+// dedupeLists collapses repeated entries in every list of rules.
+//
+// The lists are built by appending: settings read from a file first, then
+// anything named on the command line, so that -d and --exclude add to what is
+// configured rather than replacing it. That is the right behaviour for a single
+// run and the wrong one when the file being read is itself the product of an
+// earlier run — which is exactly what a resumed job reads. Passing the same
+// --exclude on each of five runs would otherwise leave five copies of it, and
+// the list grows for as long as the job is worked on.
+//
+// Collapsing them is safe because every one of these lists is a set in all but
+// type: a pattern that matches, matches once, and a host named twice is not
+// more allowed than a host named once.
+func (c *Config) dedupeLists() {
+	c.StartURLs = dedupeOnce(c.StartURLs)
+	c.Scope.Hosts = dedupeOnce(c.Scope.Hosts)
+	c.Scope.AssetHosts = dedupeOnce(c.Scope.AssetHosts)
+	c.Scope.BlockHosts = dedupeOnce(c.Scope.BlockHosts)
+	c.Scope.Include = dedupeOnce(c.Scope.Include)
+	c.Scope.Exclude = dedupeOnce(c.Scope.Exclude)
+	c.Scope.IncludeGlob = dedupeOnce(c.Scope.IncludeGlob)
+	c.Scope.ExcludeGlob = dedupeOnce(c.Scope.ExcludeGlob)
+	c.Scope.DropQueryParams = dedupeOnce(c.Scope.DropQueryParams)
+	c.Types.Categories = dedupeOnce(c.Types.Categories)
+	c.Types.AllowExtensions = dedupeOnce(c.Types.AllowExtensions)
+	c.Types.BlockExtensions = dedupeOnce(c.Types.BlockExtensions)
+	c.Render.Match = dedupeOnce(c.Render.Match)
+	c.Render.Skip = dedupeOnce(c.Render.Skip)
+	c.Render.Block = dedupeOnce(c.Render.Block)
+}
+
 func (c *Config) Normalize() error {
+	c.dedupeLists()
 	if len(c.StartURLs) == 0 {
 		return fmt.Errorf("no start URL given")
 	}

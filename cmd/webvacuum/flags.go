@@ -11,18 +11,50 @@ import (
 
 // stringList collects a repeatable flag, so --domain can be given many times
 // instead of forcing the user to build a comma-separated string.
-type stringList []string
+//
+// Whether the flag appeared at all is tracked separately from what it collected,
+// because "not mentioned" and "mentioned as empty" have to mean different
+// things once there are saved settings underneath: the first inherits the saved
+// list, the second clears it.
+type stringList struct {
+	set  bool
+	vals []string
+}
 
-func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) String() string { return strings.Join(s.vals, ",") }
 
 func (s *stringList) Set(v string) error {
+	s.set = true
 	for _, part := range strings.Split(v, ",") {
 		part = strings.TrimSpace(part)
 		if part != "" {
-			*s = append(*s, part)
+			s.vals = append(s.vals, part)
 		}
 	}
 	return nil
+}
+
+// applyList lets a list named on the command line replace the one already in
+// the configuration rather than adding to it.
+//
+// Appending is the obvious reading of a repeatable flag and the wrong one here.
+// The configuration underneath is not a set of defaults someone else chose; on
+// a resumed job it is the previous run's own settings, including whatever this
+// same command line contributed last time. Appending means passing --exclude
+// twice across two runs leaves two copies of the pattern, and the list grows
+// every time the job is restarted. It also leaves no way to take an entry back:
+// once a pattern is in the saved settings, omitting the flag would not remove
+// it.
+//
+// Replacing gives one rule that holds everywhere: the lists in the settings are
+// what the last command line said they were, and repeating a flag within a
+// single run still builds up the full list. Naming the flag with an empty value
+// clears the list.
+func applyList(dst *[]string, src stringList) {
+	if !src.set {
+		return
+	}
+	*dst = src.vals
 }
 
 // optBool distinguishes "not given" from "given as false", which matters when
@@ -372,15 +404,15 @@ func (o *options) applyTo(c *config.Config) error {
 	if o.scope.set {
 		c.Scope.Constraint = config.Constraint(strings.ToLower(o.scope.val))
 	}
-	c.Scope.Hosts = append(c.Scope.Hosts, o.domains...)
-	c.Scope.AssetHosts = append(c.Scope.AssetHosts, o.assetHosts...)
-	c.Scope.BlockHosts = append(c.Scope.BlockHosts, o.blockHosts...)
-	c.Scope.Include = append(c.Scope.Include, o.include...)
-	c.Scope.Exclude = append(c.Scope.Exclude, o.exclude...)
-	c.Scope.IncludeGlob = append(c.Scope.IncludeGlob, o.includeGlob...)
-	c.Scope.ExcludeGlob = append(c.Scope.ExcludeGlob, o.excludeGlob...)
+	applyList(&c.Scope.Hosts, o.domains)
+	applyList(&c.Scope.AssetHosts, o.assetHosts)
+	applyList(&c.Scope.BlockHosts, o.blockHosts)
+	applyList(&c.Scope.Include, o.include)
+	applyList(&c.Scope.Exclude, o.exclude)
+	applyList(&c.Scope.IncludeGlob, o.includeGlob)
+	applyList(&c.Scope.ExcludeGlob, o.excludeGlob)
 	o.ignoreQuery.apply(&c.Scope.IgnoreQuery)
-	c.Scope.DropQueryParams = append(c.Scope.DropQueryParams, o.dropParams...)
+	applyList(&c.Scope.DropQueryParams, o.dropParams)
 	o.scanComments.apply(&c.Scope.ScanComments)
 
 	o.levels.applyInt(&c.Limits.MaxLevels)
@@ -404,7 +436,7 @@ func (o *options) applyTo(c *config.Config) error {
 	o.proxy.apply(&c.Request.Proxy)
 	o.insecure.apply(&c.Request.InsecureTLS)
 
-	for _, h := range o.header {
+	for _, h := range o.header.vals {
 		name, value, ok := strings.Cut(h, ":")
 		if !ok {
 			return fmt.Errorf("--header %q should look like 'Name: value'", h)
@@ -444,9 +476,9 @@ func (o *options) applyTo(c *config.Config) error {
 	if o.typeMode.set {
 		c.Types.Mode = config.TypeFilterMode(strings.ToLower(o.typeMode.val))
 	}
-	c.Types.Categories = append(c.Types.Categories, o.categories...)
-	c.Types.AllowExtensions = append(c.Types.AllowExtensions, o.allowExt...)
-	c.Types.BlockExtensions = append(c.Types.BlockExtensions, o.blockExt...)
+	applyList(&c.Types.Categories, o.categories)
+	applyList(&c.Types.AllowExtensions, o.allowExt)
+	applyList(&c.Types.BlockExtensions, o.blockExt)
 
 	if o.noResume.set && o.noResume.val {
 		c.Resilience.ResumeOnStart = false
@@ -463,9 +495,9 @@ func (o *options) applyTo(c *config.Config) error {
 	if (o.render.set && !o.render.val) || (o.renderAll.set && !o.renderAll.val) {
 		c.Render.Mode = config.RenderNever
 	}
-	c.Render.Match = append(c.Render.Match, o.renderMatch...)
-	c.Render.Skip = append(c.Render.Skip, o.renderSkip...)
-	c.Render.Block = append(c.Render.Block, o.renderBlock...)
+	applyList(&c.Render.Match, o.renderMatch)
+	applyList(&c.Render.Skip, o.renderSkip)
+	applyList(&c.Render.Block, o.renderBlock)
 	o.renderTabs.applyInt(&c.Render.Tabs)
 	o.renderWait.apply(&c.Render.Wait)
 	o.renderIdle.apply(&c.Render.Idle)

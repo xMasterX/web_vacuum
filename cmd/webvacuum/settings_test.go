@@ -113,3 +113,100 @@ func TestUnreadableSavedSettingsDoNotStopTheJob(t *testing.T) {
 		t.Error("a corrupt saved config should leave the defaults in place, not fail")
 	}
 }
+
+// TestRepeatedFlagsReplaceTheSavedList is the bug that showed up the first time
+// settings were inherited: the same command, run five times, left five copies
+// of the same --exclude pattern in the settings.
+//
+// The lists were built by appending, which is right when the base is a set of
+// defaults and wrong when the base is the previous run's own settings — those
+// already contain what this command line contributed last time.
+func TestRepeatedFlagsReplaceTheSavedList(t *testing.T) {
+	dest := savedJob(t, editedSettings)
+
+	got := resolved(t, "http://example.com/", "-o", dest, "--exclude", "printthread")
+	if n := strings.Count(got, "printthread"); n != 1 {
+		t.Errorf("exclude pattern appears %d times, want 1:\n%s", n, got)
+	}
+
+	// And the replacement is a replacement, not a merge: the pattern that was
+	// saved and not named again is gone.
+	got = resolved(t, "http://example.com/", "-o", dest, "--exclude", "sendmessage")
+	if strings.Contains(got, "printthread") {
+		t.Error("--exclude should replace the saved list, not add to it")
+	}
+	if !strings.Contains(got, "sendmessage") {
+		t.Error("the pattern given on the command line is missing")
+	}
+}
+
+// TestAListNotMentionedIsInherited keeps replacement from turning into erasure:
+// only the lists actually named on the command line are replaced.
+func TestAListNotMentionedIsInherited(t *testing.T) {
+	dest := savedJob(t, editedSettings)
+	got := resolved(t, "http://example.com/", "-o", dest, "--drop-param", "sid")
+
+	if !strings.Contains(got, "printthread") {
+		t.Error("naming --drop-param should not have cleared the exclude list")
+	}
+	if !strings.Contains(got, "sid") {
+		t.Error("--drop-param was not applied")
+	}
+}
+
+// TestAnEmptyValueClearsTheList is how a saved list is taken back without
+// throwing away every other setting with --fresh-settings.
+func TestAnEmptyValueClearsTheList(t *testing.T) {
+	dest := savedJob(t, editedSettings)
+	got := resolved(t, "http://example.com/", "-o", dest, "--exclude", "")
+
+	if strings.Contains(got, "printthread") {
+		t.Error("--exclude with an empty value should clear the saved list")
+	}
+	if !strings.Contains(got, "user_agent: marker-agent") {
+		t.Error("clearing one list should leave the other settings alone")
+	}
+}
+
+// TestRepeatingAFlagWithinOneRunStillAccumulates: replacement is between runs,
+// not within one. A repeatable option is still repeatable.
+func TestRepeatingAFlagWithinOneRunStillAccumulates(t *testing.T) {
+	dest := savedJob(t, editedSettings)
+	got := resolved(t, "http://example.com/", "-o", dest,
+		"--exclude", "newreply", "--exclude", "sendmessage")
+
+	for _, want := range []string{"newreply", "sendmessage"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("repeating --exclude lost %q", want)
+		}
+	}
+	if strings.Contains(got, "printthread") {
+		t.Error("the saved list should have been replaced by the two given")
+	}
+}
+
+// TestDuplicatesAlreadySavedAreCleanedUp heals the settings files that the
+// appending version left behind, rather than requiring them to be edited by
+// hand.
+func TestDuplicatesAlreadySavedAreCleanedUp(t *testing.T) {
+	dest := savedJob(t, `
+start_urls:
+  - http://example.com/
+scope:
+  exclude:
+    - printthread
+    - printthread
+    - printthread
+  drop_query_params:
+    - s
+    - s
+`)
+	got := resolved(t, "http://example.com/", "-o", dest)
+
+	if n := strings.Count(got, "printthread"); n != 1 {
+		t.Errorf("exclude pattern appears %d times, want 1", n)
+	}
+	if n := strings.Count(got, "- s\n"); n != 1 {
+		t.Errorf("drop parameter appears %d times, want 1:\n%s", n, got)
+	}
+}
