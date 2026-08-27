@@ -83,6 +83,14 @@ const (
 	LoginPrompt LoginMode = "prompt" // ask interactively (TUI only), else behave as auto
 )
 
+// DefaultConnections and MaxConnections bound the size of the worker pool.
+// They live here because the crawler, the CLI and the two interfaces all have
+// to agree on them, and a second copy would eventually disagree.
+const (
+	DefaultConnections = 8
+	MaxConnections     = 256
+)
+
 // ---------------------------------------------------------------- sections
 
 // GeneralConfig mirrors the top-level behaviour switches.
@@ -604,10 +612,10 @@ func (c *Config) Normalize() error {
 	c.Destination = abs
 
 	if c.General.Connections <= 0 {
-		c.General.Connections = 8
+		c.General.Connections = DefaultConnections
 	}
-	if c.General.Connections > 256 {
-		c.General.Connections = 256
+	if c.General.Connections > MaxConnections {
+		c.General.Connections = MaxConnections
 	}
 	if c.Request.PerHostConns <= 0 {
 		c.Request.PerHostConns = c.General.Connections

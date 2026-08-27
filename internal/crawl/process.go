@@ -210,7 +210,6 @@ func (e *Engine) process(ctx context.Context, slot int, item *Item) {
 	}
 
 	if err != nil {
-		os.Remove(abs + ".part")
 		if errors.Is(err, fetch.ErrTooLarge) {
 			e.finishSkipped(&entry, "exceeded the maximum file size")
 			return
@@ -469,11 +468,17 @@ func (e *Engine) streamToFile(slot int, abs string, r io.Reader) (int64, error) 
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return 0, err
 	}
-	tmp := abs + ".part"
-	f, err := os.Create(tmp)
+	// The temporary name is unique rather than derived from the destination.
+	// Two downloads that end up at the same path — a pair of URLs a server
+	// names identically through Content-Disposition, say — would otherwise
+	// share one temporary file, interleave their bytes into it, and leave the
+	// second to rename a file the first has already moved. Distinct temporary
+	// files make the worst case a harmless overwrite by whichever finishes last.
+	f, err := os.CreateTemp(filepath.Dir(abs), filepath.Base(abs)+".*.part")
 	if err != nil {
 		return 0, err
 	}
+	tmp := f.Name()
 	var total int64
 	chunk := make([]byte, 256*1024)
 	for {
@@ -511,11 +516,29 @@ func writeFileAtomic(abs string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return err
 	}
-	tmp := abs + ".part"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(abs), filepath.Base(abs)+".*.part")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, abs)
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, abs); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- limits

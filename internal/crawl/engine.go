@@ -58,8 +58,11 @@ type Engine struct {
 	slotsMu sync.RWMutex
 	slots   []SlotState
 
-	phase      atomic.Value // Phase
-	startedAt  time.Time
+	phase atomic.Value // Phase
+	// startedAt is written once as the job starts and read continuously by the
+	// interfaces, which run on their own goroutines. It is behind an atomic for
+	// that reason and not for any other: nothing races to set it.
+	startedAt  atomic.Pointer[time.Time]
 	pass       atomic.Int64
 	stopOnce   sync.Once
 	cancel     context.CancelFunc
@@ -320,7 +323,8 @@ func (e *Engine) Run(ctx context.Context) error {
 		defer timer.Stop()
 	}
 
-	e.startedAt = time.Now()
+	started := time.Now()
+	e.startedAt.Store(&started)
 	e.setPhase(PhaseStarting)
 	e.logf(LevelInfo, "destination %s", e.cfg().Destination)
 
@@ -446,12 +450,41 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) runWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	started, live := 0, 0
+	live := 0
+	// inUse tracks which display slots are taken. Slot numbers are handed back
+	// when a worker retires and the lowest free one is reused, so lowering the
+	// connection count and raising it again does not leave a trail of dead rows
+	// in the connections pane.
+	var inUse []bool
+
+	// takeSlot and freeSlot are called with mu held.
+	takeSlot := func() int {
+		for i, used := range inUse {
+			if !used {
+				inUse[i] = true
+				return i
+			}
+		}
+		inUse = append(inUse, true)
+		return len(inUse) - 1
+	}
+	freeSlot := func(slot int) {
+		if slot >= 0 && slot < len(inUse) {
+			inUse[slot] = false
+		}
+	}
+
+	want := func() int {
+		n := int(e.desiredWorkers.Load())
+		if n < 1 {
+			n = 1
+		}
+		return n
+	}
 
 	spawn := func() {
 		mu.Lock()
-		slot := started
-		started++
+		slot := takeSlot()
 		live++
 		mu.Unlock()
 
@@ -459,11 +492,64 @@ func (e *Engine) runWorkers(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			e.worker(ctx, slot)
-			e.endSlot(slot)
+
+			// A worker retires when the pool is larger than the connection
+			// count asks for. Two things decide it, and both are needed.
+			//
+			// How many go is decided by the number of workers running, not by
+			// this worker's slot number. Slot numbers are reused and were never
+			// a position in the pool, so comparing one to a count stops meaning
+			// anything the moment the pool has been resized twice. Doing that
+			// is what used to make a raise after a lowering spawn workers that
+			// retired the instant they started, every quarter second, for as
+			// long as the job ran.
+			//
+			// Which ones go is decided by slot order: a worker steps down only
+			// once enough workers below it are staying. That keeps the surviving
+			// workers on the lowest slots, which is what lets the connections
+			// pane shrink — a row can only be dropped from the end, and a pool
+			// that retired an arbitrary selection would leave the last row
+			// occupied and the pane stuck at its largest size.
+			//
+			// The count is decremented here, under the lock that owns it and in
+			// the same step as the decision, so several workers asking at once
+			// cannot each conclude they are the surplus one. The answer is
+			// final: a worker told to retire is finished, and is not asked
+			// again.
+			retiring := false
+			stillWanted := func() bool {
+				if retiring {
+					return false
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				n := want()
+				if live <= n {
+					return true
+				}
+				below := 0
+				for i := 0; i < slot && i < len(inUse); i++ {
+					if inUse[i] {
+						below++
+					}
+				}
+				if below < n {
+					return true
+				}
+				live--
+				retiring = true
+				return false
+			}
+
+			e.worker(ctx, slot, stillWanted)
+
 			mu.Lock()
-			live--
+			if !retiring {
+				live--
+			}
+			freeSlot(slot)
 			mu.Unlock()
+			e.endSlot(slot)
 		}()
 	}
 
@@ -473,7 +559,7 @@ func (e *Engine) runWorkers(ctx context.Context) {
 		t := time.NewTicker(250 * time.Millisecond)
 		defer t.Stop()
 
-		for i := 0; i < int(e.desiredWorkers.Load()); i++ {
+		for i := 0; i < want(); i++ {
 			spawn()
 		}
 		for {
@@ -481,7 +567,7 @@ func (e *Engine) runWorkers(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				want := int(e.desiredWorkers.Load())
+				n := want()
 				mu.Lock()
 				running := live
 				mu.Unlock()
@@ -492,7 +578,8 @@ func (e *Engine) runWorkers(ctx context.Context) {
 				if running == 0 {
 					return
 				}
-				for i := running; i < want; i++ {
+				e.trimSlots(n)
+				for i := running; i < n; i++ {
 					spawn()
 				}
 			}
@@ -503,13 +590,15 @@ func (e *Engine) runWorkers(ctx context.Context) {
 	wg.Wait()
 }
 
-func (e *Engine) worker(ctx context.Context, slot int) {
-	retire := func() bool { return e.wantedWorker(slot) }
+// worker takes items off the frontier until the queue drains or the pool is
+// asked to shrink. stillWanted answers the second question and is asked both
+// between items and while parked waiting for one.
+func (e *Engine) worker(ctx context.Context, slot int, stillWanted func() bool) {
 	for {
-		if !retire() {
+		if !stillWanted() {
 			return
 		}
-		item, ok := e.frontier.Pop(ctx, retire)
+		item, ok := e.frontier.Pop(ctx, stillWanted)
 		if !ok {
 			return
 		}
@@ -755,11 +844,20 @@ func (e *Engine) enqueue(u *url.URL, depth int, role rules.Role, referer string,
 		return false
 	}
 
-	if err := e.store.Put(&state.Entry{
+	// Claiming the key and queueing it are one step. The Has check at the top
+	// of this function is an early exit, not the guarantee: two workers scanning
+	// two pages that link to the same URL reach it at the same moment, both find
+	// nothing, and without an atomic claim both would queue it and both would
+	// download it over the top of each other.
+	won, err := e.store.Claim(&state.Entry{
 		Key: key, URL: u.String(), Status: state.Pending,
 		Depth: depth, Role: role.String(), Referer: referer,
-	}); err != nil {
+	})
+	if err != nil {
 		e.logf(LevelWarn, "state: %v", err)
+	}
+	if !won {
+		return false
 	}
 	return e.frontier.Push(&Item{
 		Key: key, URL: u, Depth: depth, Role: role, Referer: referer, From: from,

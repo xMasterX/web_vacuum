@@ -103,6 +103,14 @@ func (e *Engine) logf(level Level, format string, args ...any) {
 // ---------------------------------------------------------------- snapshot
 
 // Snapshot builds the picture both UIs render from.
+// started reports when the job began, or the zero time before it has.
+func (e *Engine) started() time.Time {
+	if t := e.startedAt.Load(); t != nil {
+		return *t
+	}
+	return time.Time{}
+}
+
 func (e *Engine) Snapshot() Snapshot {
 	st := e.store.Stats()
 	fs := e.client.Stats()
@@ -112,9 +120,10 @@ func (e *Engine) Snapshot() Snapshot {
 	copy(slots, e.slots)
 	e.slotsMu.RUnlock()
 
+	started := e.started()
 	elapsed := time.Duration(0)
-	if !e.startedAt.IsZero() {
-		elapsed = time.Since(e.startedAt)
+	if !started.IsZero() {
+		elapsed = time.Since(started)
 	}
 	bps := e.byteMeter.Update(fs.BytesIn)
 	fps := e.fileMeter.Update(int64(st.Done))
@@ -142,7 +151,7 @@ func (e *Engine) Snapshot() Snapshot {
 		BytesPerSec: bps,
 		FilesPerSec: fps,
 		Pass:        int(e.pass.Load()),
-		StartedAt:   e.startedAt,
+		StartedAt:   started,
 		MaxFiles:    e.cfg().Limits.MaxFiles,
 		MaxBytes:    e.cfg().Limits.MaxBytes.V(),
 		RateLimit:   e.client.RateLimit(),
@@ -468,13 +477,14 @@ func (e *Engine) writeReport() error {
 		top = top[:10]
 	}
 
+	started := e.started()
 	rep := Report{
 		Name:        e.cfg().Name,
 		StartURLs:   e.cfg().StartURLs,
 		Destination: e.cfg().Destination,
-		StartedAt:   e.startedAt,
+		StartedAt:   started,
 		FinishedAt:  time.Now(),
-		Duration:    time.Since(e.startedAt).Round(time.Second).String(),
+		Duration:    time.Since(started).Round(time.Second).String(),
 		Phase:       e.Phase(),
 		StopReason:  reason,
 		Stats:       e.store.Stats(),

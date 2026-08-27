@@ -179,9 +179,31 @@ func (s *Store) applyLocked(e *Entry) {
 // Put records an entry, appending to the journal. Writes are buffered; Flush
 // or the periodic checkpoint makes them durable.
 func (s *Store) Put(e *Entry) error {
-	e.UpdatedAt = time.Now().Unix()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.putLocked(e)
+}
+
+// Claim records an entry only if its key has never been seen, and reports
+// whether it won.
+//
+// This is Has followed by Put as a single step, and it has to be. Split in two
+// they are a race: the same URL is routinely linked from several pages, and two
+// workers scanning those pages at the same moment can both find no entry, both
+// add one, and both queue it. Two downloads of one URL means two writers on one
+// file, which surfaces not as a harmless duplicate but as a missing or damaged
+// one — the loser renames a temporary file the winner has already moved away.
+func (s *Store) Claim(e *Entry) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, seen := s.entries[e.Key]; seen {
+		return false, nil
+	}
+	return true, s.putLocked(e)
+}
+
+func (s *Store) putLocked(e *Entry) error {
+	e.UpdatedAt = time.Now().Unix()
 	if s.closed {
 		return os.ErrClosed
 	}

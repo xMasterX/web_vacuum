@@ -208,8 +208,8 @@ func (e *Engine) SetConnections(n int) int {
 	if n < 1 {
 		n = 1
 	}
-	if n > 256 {
-		n = 256
+	if n > config.MaxConnections {
+		n = config.MaxConnections
 	}
 	next := e.cfg().Clone()
 	next.General.Connections = n
@@ -239,16 +239,32 @@ func (e *Engine) setWorkerCount(n int) {
 	e.frontier.Wake()
 }
 
-// wantedWorker reports whether the worker holding this index should keep going.
-func (e *Engine) wantedWorker(idx int) bool {
-	return int64(idx) < e.desiredWorkers.Load()
-}
-
 // ensureSlots grows the display slots to cover a raised connection count.
 func (e *Engine) ensureSlots(n int) {
+	if n > config.MaxConnections {
+		n = config.MaxConnections
+	}
 	e.slotsMu.Lock()
 	defer e.slotsMu.Unlock()
 	for len(e.slots) < n {
 		e.slots = append(e.slots, SlotState{ID: len(e.slots) + 1})
+	}
+}
+
+// trimSlots drops display rows left behind by a higher connection count, so the
+// connections pane shows the number of connections actually asked for rather
+// than the largest number ever asked for.
+//
+// Only idle rows at the end go. Workers are given the lowest free slot, so the
+// busy ones cluster at the front and a row still showing a transfer is never
+// removed from under it.
+func (e *Engine) trimSlots(n int) {
+	if n < 1 {
+		n = 1
+	}
+	e.slotsMu.Lock()
+	defer e.slotsMu.Unlock()
+	for len(e.slots) > n && !e.slots[len(e.slots)-1].Busy {
+		e.slots = e.slots[:len(e.slots)-1]
 	}
 }

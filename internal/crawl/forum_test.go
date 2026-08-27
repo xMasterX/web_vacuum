@@ -153,7 +153,7 @@ func TestAttachmentsAreDownloadedByDefault(t *testing.T) {
 		// specific mismatch between the key a link resolves to and the key a
 		// file was stored under.
 		for _, en := range e.Store().Select(nil) {
-			t.Logf("  %-8s alias=%-5v path=%-40q key=%s", en.Status, en.Alias, en.Path, en.Key)
+			t.Logf("  %-8s alias=%-5v path=%-40q key=%s err=%q", en.Status, en.Alias, en.Path, en.Key, en.Err)
 		}
 	}
 }
