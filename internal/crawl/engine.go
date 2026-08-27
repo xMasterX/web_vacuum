@@ -560,6 +560,11 @@ func (e *Engine) startCheckpointer(ctx context.Context) func() {
 // seed queues the start URLs plus anything left pending from a previous run.
 func (e *Engine) seed(ctx context.Context) int {
 	n := 0
+	// The start URLs are identified up front because resume pushes whatever was
+	// still pending before enqueueStart gets a turn, and a start URL left
+	// pending by the previous run comes back through that path. It has to carry
+	// the seed exemption either way.
+	starts := e.startKeys()
 	if e.cfg().Resilience.ResumeOnStart {
 		for _, entry := range e.store.Select(func(en *state.Entry) bool {
 			return en.Status == state.Pending || en.Status == state.Active
@@ -578,7 +583,7 @@ func (e *Engine) seed(ctx context.Context) int {
 			e.seedQueued[entry.Key] = true
 			if e.frontier.Push(&Item{
 				Key: entry.Key, URL: u, Depth: entry.Depth,
-				Role: role, Referer: entry.Referer,
+				Role: role, Referer: entry.Referer, Seed: starts[entry.Key],
 			}) {
 				n++
 			}
@@ -614,7 +619,7 @@ func (e *Engine) seed(ctx context.Context) int {
 			e.seedQueued[entry.Key] = true
 			if e.frontier.Push(&Item{
 				Key: entry.Key, URL: u, Depth: entry.Depth,
-				Role: role, Referer: entry.Referer,
+				Role: role, Referer: entry.Referer, Seed: starts[entry.Key],
 			}) {
 				retried++
 				n++
@@ -761,6 +766,17 @@ func (e *Engine) enqueue(u *url.URL, depth int, role rules.Role, referer string,
 	})
 }
 
+// startKeys is the set of queue keys belonging to the configured start URLs.
+func (e *Engine) startKeys() map[string]bool {
+	keys := make(map[string]bool, len(e.cfg().StartURLs))
+	for _, raw := range e.cfg().StartURLs {
+		if u, err := urlx.Parse(raw); err == nil {
+			keys[urlx.Key(e.rules().NormalizeForQueue(u))] = true
+		}
+	}
+	return keys
+}
+
 // enqueueStart queues a start URL unconditionally. A start URL a previous run
 // already downloaded must still enter the queue: whether it gets re-fetched is
 // the file-replacement policy's call, not the dedup index's. Without this, the
@@ -784,12 +800,13 @@ func (e *Engine) enqueueStart(u *url.URL) bool {
 	if err := e.store.Put(&entry); err != nil {
 		e.logf(LevelWarn, "state: %v", err)
 	}
-	return e.frontier.Push(&Item{Key: key, URL: u, Depth: 0, Role: rules.RolePage})
+	return e.frontier.Push(&Item{Key: key, URL: u, Depth: 0, Role: rules.RolePage, Seed: true})
 }
 
 // requeueFailed puts retryable failures back in the queue for a later sweep.
 func (e *Engine) requeueFailed(pass int) int {
 	n := 0
+	starts := e.startKeys()
 	for _, entry := range e.store.Select(func(en *state.Entry) bool {
 		return en.Status == state.Failed && en.Pass < pass && retryableEntry(en)
 	}) {
@@ -807,7 +824,7 @@ func (e *Engine) requeueFailed(pass int) int {
 		e.store.Put(&en)
 		if e.frontier.Push(&Item{
 			Key: entry.Key, URL: u, Depth: entry.Depth,
-			Role: role, Referer: entry.Referer, Pass: pass,
+			Role: role, Referer: entry.Referer, Pass: pass, Seed: starts[entry.Key],
 		}) {
 			n++
 		}

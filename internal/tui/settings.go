@@ -211,7 +211,7 @@ func settingFields() []settingField {
 		},
 		{
 			label: "exclude", kind: fieldList,
-			help: "regular expressions; these win over everything else",
+			help: "regexps; drops matching URLs already queued too. a plain word works",
 			get:  func(c *config.Config) string { return joinList(c.Scope.Exclude) },
 			set: func(c *config.Config, v string) error {
 				c.Scope.Exclude = splitList(v)

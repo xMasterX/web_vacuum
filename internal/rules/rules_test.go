@@ -197,3 +197,73 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	}
 	return u
 }
+
+// TestProhibitedAgreesWithCheckURL keeps the two apart from drifting.
+//
+// Prohibited exists so the deny-only rules can be applied a second time, just
+// before a queued URL is fetched. That is only sound while it stays a faithful
+// prefix of CheckURL: a rule added to one and not the other would either let
+// something through the second pass that the first refused, or — worse — start
+// deleting queued work that the settings actually allow.
+//
+// Whenever Prohibited says no, CheckURL must say no for the same reason. The
+// converse does not hold: CheckURL denies plenty of URLs on the permissive
+// half of its logic, which Prohibited deliberately does not consider.
+func TestProhibitedAgreesWithCheckURL(t *testing.T) {
+	e := engineFor(t, func(c *config.Config) {
+		c.Scope.Exclude = []string{`/(login|logout|newreply)`}
+		c.Scope.BlockHosts = []string{"ads.example.net"}
+		c.Scope.MaxURLLength = 120
+		c.Scope.MaxPathDepth = 4
+		c.Scope.MaxRepeatSegment = 2
+		c.Limits.MaxLevels = 3
+		c.Types.BlockExtensions = []string{".exe"}
+		// An include pattern wide enough to allow everything, so that any
+		// disagreement below can only come from the deny-only half.
+		c.Scope.Include = []string{".*"}
+	})
+
+	urls := []string{
+		"https://forum.example.com/showthread.php?t=1",
+		"https://forum.example.com/login.php",
+		"https://forum.example.com/newreply.php?p=9",
+		"https://ads.example.net/banner.gif",
+		"https://forum.example.com/setup.exe",
+		"https://forum.example.com/a/b/c/d/e/f/deep.html",
+		"https://forum.example.com/a/a/a/a/loop.html",
+		"https://forum.example.com/x?q=" + longString(200),
+		"https://forum.example.com/images/logo.png",
+	}
+
+	for _, raw := range urls {
+		u, err := urlx.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %s: %v", raw, err)
+		}
+		for _, role := range []Role{RolePage, RoleAsset} {
+			for _, depth := range []int{0, 1, 9} {
+				d, forbidden := e.Prohibited(u, role, depth)
+				if !forbidden {
+					continue
+				}
+				full := e.CheckURL(u, role, depth, nil)
+				if full.Allow {
+					t.Errorf("Prohibited denied %s (role %v, depth %d) as %q but CheckURL allowed it",
+						raw, role, depth, d.Reason)
+				}
+				if full.Reason != d.Reason {
+					t.Errorf("%s (role %v, depth %d): Prohibited says %q, CheckURL says %q",
+						raw, role, depth, d.Reason, full.Reason)
+				}
+			}
+		}
+	}
+}
+
+func longString(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = 'x'
+	}
+	return string(b)
+}

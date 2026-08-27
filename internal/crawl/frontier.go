@@ -20,6 +20,12 @@ type Item struct {
 	From *url.URL
 	// Pass is the retry sweep that queued this item; 0 is the main crawl.
 	Pass int
+	// Seed marks a start URL. Start URLs enter the queue without consulting the
+	// scope rules, so they are also exempt from the re-check that purges the
+	// queue when the exclusions are tightened mid-run. Without that exemption a
+	// pattern that happened to match the starting page would end the crawl
+	// rather than narrow it.
+	Seed bool
 	// seq preserves first-in-first-out order within a depth, which turns the
 	// priority queue into a breadth-first crawl.
 	seq int64

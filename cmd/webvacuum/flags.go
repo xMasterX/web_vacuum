@@ -165,6 +165,7 @@ type options struct {
 	configFile   string
 	saveConfig   string
 	noGlobalConf bool
+	freshConfig  bool
 
 	out  optString
 	name optString
@@ -263,6 +264,7 @@ func (o *options) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.configFile, "config", "", "load settings from a YAML file")
 	fs.StringVar(&o.saveConfig, "save-config", "", "write the resolved settings to a YAML file and exit")
 	fs.BoolVar(&o.noGlobalConf, "no-global-config", false, "ignore the automatically discovered configuration files")
+	fs.BoolVar(&o.freshConfig, "fresh-settings", false, "ignore the settings saved in the download folder and start from the defaults")
 
 	pair := func(v flag.Value, usage string, names ...string) {
 		for _, n := range names {

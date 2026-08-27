@@ -27,6 +27,9 @@ func cmdDump(args []string) error {
 	if err != nil {
 		return err
 	}
+	if cfg, err = adoptSavedSettings(cfg, o); err != nil {
+		return err
+	}
 
 	if o.saveConfig != "" {
 		if err := cfg.Save(o.saveConfig); err != nil {
@@ -49,6 +52,51 @@ func cmdDump(args []string) error {
 	}
 
 	return runJob(cfg, o)
+}
+
+// adoptSavedSettings makes a repeat run pick up where the last one left off in
+// settings as well as in progress.
+//
+// Running the same command again is the documented way to resume, and a job
+// that has been running for hours has usually had its settings adjusted from
+// the Setup pane by then — the connection count turned down, a pattern added to
+// the exclusions, a timeout shortened. Those changes are written to the job's
+// own config.yaml as they are made. Without this, the next run rebuilds its
+// settings from the defaults and the command line alone, so every one of those
+// adjustments is silently discarded and has to be made again.
+//
+// The saved settings are the base and this invocation's flags are layered on
+// top, exactly as the resume command does it, so a run can still be given a
+// different speed or scope on the way in. The start URLs come from the command
+// line when any were given, since naming a URL is as explicit as passing a
+// flag. --fresh-settings opts out and starts from the defaults.
+func adoptSavedSettings(cfg *config.Config, o *options) (*config.Config, error) {
+	if o.freshConfig {
+		return cfg, nil
+	}
+	path := filepath.Join(config.WorkDirIn(cfg.Destination), "config.yaml")
+	if _, err := os.Stat(path); err != nil {
+		return cfg, nil
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		// A corrupt or unreadable file must not stop a download that would
+		// otherwise run; the defaults are a usable answer.
+		fmt.Fprintf(os.Stderr, "webvacuum: ignoring %s: %v\n", path, err)
+		return cfg, nil
+	}
+	if len(cfg.StartURLs) > 0 {
+		saved.StartURLs = cfg.StartURLs
+	}
+	saved.Destination = cfg.Destination
+	if err := o.applyTo(saved); err != nil {
+		return nil, err
+	}
+	if err := saved.Normalize(); err != nil {
+		return nil, err
+	}
+	configSources = append(configSources, path+" (settings saved by the last run)")
+	return saved, nil
 }
 
 // cmdResume continues an interrupted job using the config saved beside it.

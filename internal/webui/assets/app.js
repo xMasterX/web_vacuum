@@ -319,7 +319,7 @@ const SETTINGS = [
   { key: 'scope.hosts', label: 'extra domains', type: 'list', help: 'other domains to crawl fully' },
   { key: 'scope.asset_hosts', label: 'asset domains', type: 'list', help: 'domains allowed for files only' },
   { key: 'scope.block_hosts', label: 'blocked domains', type: 'list' },
-  { key: 'scope.exclude', label: 'exclude', type: 'list', help: 'regular expressions; these win over everything' },
+  { key: 'scope.exclude', label: 'exclude', type: 'list', help: 'regexps; drops matching URLs already queued too. a plain word works' },
   { key: 'scope.include', label: 'include', type: 'list' },
   { key: 'scope.drop_query_params', label: 'drop parameters', type: 'list', help: 'e.g. session ids' },
   { key: 'general.supporting_files', label: 'supporting files', type: 'enum', preset: 'supporting' },

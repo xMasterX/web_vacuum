@@ -162,6 +162,58 @@ func globsToRegex(globs []string) []string {
 
 // ---------------------------------------------------------------- URL scope
 
+// Prohibited applies the deny-only half of the scope rules: the prohibitions
+// that no include pattern, allowed host or constraint can override.
+//
+// It is split out of CheckURL because these are the only rules that are safe to
+// apply a second time. Everything CheckURL does after this point answers "what
+// permits this URL", and those answers depend on context a queued item no
+// longer carries — chiefly the page that linked to it, which the host+1 rule
+// needs and which is not restored on resume. The prohibitions depend on nothing
+// but the URL itself, so re-running them can only reach the same verdict the
+// current settings would have reached at discovery time.
+//
+// The second application happens just before a queued URL is fetched, so that
+// tightening the exclusions mid-run clears out what is already queued instead
+// of only affecting links not yet found.
+func (e *Engine) Prohibited(u *url.URL, role Role, depth int) (Decision, bool) {
+	s := e.cfg.Scope
+	full := u.String()
+
+	if len(s.BlockHosts) > 0 && urlx.AnyHostMatchesURL(s.BlockHosts, u) {
+		return deny("host is blocked"), true
+	}
+	for _, re := range e.exclude {
+		if re.MatchString(full) {
+			return deny("matched exclude %s", re.String()), true
+		}
+	}
+	if s.MaxURLLength > 0 && len(full) > s.MaxURLLength {
+		return deny("URL longer than %d characters", s.MaxURLLength), true
+	}
+	if s.SkipQueryURLs && u.RawQuery != "" {
+		return deny("URL has a query string"), true
+	}
+	if s.MaxPathDepth > 0 && len(urlx.Segments(u)) > s.MaxPathDepth {
+		return deny("deeper than %d path segments", s.MaxPathDepth), true
+	}
+	if s.MaxRepeatSegment > 0 && urlx.MaxRepeatedSegment(u) > s.MaxRepeatSegment {
+		return deny("looks like a spider trap (repeated path segment)"), true
+	}
+	if e.cfg.Limits.MaxLevels > 0 && depth > e.cfg.Limits.MaxLevels {
+		return deny("beyond level %d", e.cfg.Limits.MaxLevels), true
+	}
+	if ext := urlx.Extension(u); ext != "" {
+		if e.blockExt[ext] {
+			return deny("blocked extension %s", ext), true
+		}
+		if len(e.allowExt) > 0 && role == RoleAsset && !e.allowExt[ext] {
+			return deny("extension %s not in the allow list", ext), true
+		}
+	}
+	return allow(), false
+}
+
 // CheckURL decides whether a URL should be requested at all.
 //
 // Order of decision, highest priority first:
@@ -178,36 +230,8 @@ func (e *Engine) CheckURL(u *url.URL, role Role, depth int, from *url.URL) Decis
 	host := strings.ToLower(u.Hostname())
 	full := u.String()
 
-	if len(s.BlockHosts) > 0 && urlx.AnyHostMatchesURL(s.BlockHosts, u) {
-		return deny("host is blocked")
-	}
-	for _, re := range e.exclude {
-		if re.MatchString(full) {
-			return deny("matched exclude %s", re.String())
-		}
-	}
-	if s.MaxURLLength > 0 && len(full) > s.MaxURLLength {
-		return deny("URL longer than %d characters", s.MaxURLLength)
-	}
-	if s.SkipQueryURLs && u.RawQuery != "" {
-		return deny("URL has a query string")
-	}
-	if s.MaxPathDepth > 0 && len(urlx.Segments(u)) > s.MaxPathDepth {
-		return deny("deeper than %d path segments", s.MaxPathDepth)
-	}
-	if s.MaxRepeatSegment > 0 && urlx.MaxRepeatedSegment(u) > s.MaxRepeatSegment {
-		return deny("looks like a spider trap (repeated path segment)")
-	}
-	if e.cfg.Limits.MaxLevels > 0 && depth > e.cfg.Limits.MaxLevels {
-		return deny("beyond level %d", e.cfg.Limits.MaxLevels)
-	}
-	if ext := urlx.Extension(u); ext != "" {
-		if e.blockExt[ext] {
-			return deny("blocked extension %s", ext)
-		}
-		if len(e.allowExt) > 0 && role == RoleAsset && !e.allowExt[ext] {
-			return deny("extension %s not in the allow list", ext)
-		}
+	if d, forbidden := e.Prohibited(u, role, depth); forbidden {
+		return d
 	}
 
 	for _, re := range e.include {

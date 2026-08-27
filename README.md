@@ -169,6 +169,23 @@ Decisions are made in this order, highest priority first:
 
 An explicit exclude always wins. An explicit include beats the scope.
 
+Rules 1 to 3 are the prohibitions, and they are applied twice: once when a link
+is found and again just before the URL is actually requested. That second pass
+is what makes an exclusion added mid-run worth adding. Thirty thousand URLs into
+a forum you notice that everything matching `printthread` is junk; if the rule
+only applied to links not yet discovered, all thirty thousand already in the
+queue would be downloaded anyway. Instead they are dropped as the queue reaches
+them, and the log says which rule dropped them.
+
+A plain word is a valid regular expression, so `printthread` on its own works.
+Start URLs are never dropped this way — they enter the queue without consulting
+the rules, so a pattern that happens to match the starting page narrows the
+crawl rather than ending it.
+
+Rules 4 to 8 are not re-applied, because they depend on context a queued URL no
+longer carries: the host+1 rule needs to know which page linked to it, and that
+is not restored when a job resumes.
+
 ## Changing settings while it runs
 
 Nothing needs stopping to be adjusted. Press `F2` for the Setup pane, move with
@@ -183,6 +200,13 @@ people reach for most.
 Editing `<destination>/.webvacuum/config.yaml` in a text editor works too: the
 file is re-read within a couple of seconds and applied. Whichever route you
 take, the file and the running job stay in step.
+
+Those changes survive the run. Every edit is written to that same file, and
+running the command again picks it up as the starting point, so the connection
+count you turned down and the pattern you added stay where you put them instead
+of reverting to the defaults. Flags given on the new run still win over the
+saved values, and `--fresh-settings` ignores the file and starts from the
+defaults.
 
 A few settings cannot change on a job already underway — the destination, the
 start URLs, the path layout — because they decide where files land, and moving

@@ -31,6 +31,29 @@ func (e *Engine) process(ctx context.Context, slot int, item *Item) {
 		return
 	}
 
+	// The scope prohibitions are applied a second time, here, immediately before
+	// the request goes out.
+	//
+	// The first application happens when a link is discovered, which is the
+	// right place for it but not a sufficient one: settings can change while the
+	// job runs, and by the time someone notices that a pattern is filling the
+	// queue with junk, tens of thousands of matching URLs are already in it.
+	// Filtering only what has yet to be discovered would leave all of them to be
+	// downloaded anyway, which is not what anyone means by adding an exclusion.
+	//
+	// Only the prohibitions are re-applied; see rules.Prohibited for why the
+	// permissive half cannot be. Start URLs are exempt because they were queued
+	// without consulting the rules in the first place.
+	if !item.Seed {
+		if d, forbidden := e.rules().Prohibited(item.URL, item.Role, item.Depth); forbidden {
+			entry, _ := e.store.Get(item.Key)
+			entry.Key, entry.URL, entry.Depth = item.Key, item.URL.String(), item.Depth
+			entry.Role = item.Role.String()
+			e.finishSkipped(&entry, d.Reason)
+			return
+		}
+	}
+
 	if dead, reason := e.health.dead(hostOf(item.URL)); dead {
 		entry, _ := e.store.Get(item.Key)
 		entry.Key, entry.URL, entry.Depth = item.Key, item.URL.String(), item.Depth
